@@ -187,7 +187,6 @@ class SeqAttnMatch(nn.Module):
 class BilinearSeqAttn(nn.Module):
     """A bilinear attention layer over a sequence X w.r.t y:
     * o_i = softmax(x_i'Wy) for x_i in X.
-
     Optionally don't normalize output weights.
     """
     def __init__(self, x_size, y_size, identity=False):
@@ -233,6 +232,52 @@ class LinearSeqAttn(nn.Module):
         scores.data.masked_fill_(x_mask.data, -float('inf'))
         alpha = F.softmax(scores)
         return alpha
+
+
+class ReasonetInternalStateController(nn.Module):
+    """ Reasonet internal stape controller. """
+    pass
+
+
+class ContextEncoder(nn.Module):
+    pass
+
+
+class QuestionEncoder(nn.Module):
+
+    pass
+
+class Memory(nn.Module):
+
+    pass
+
+
+class MemoryAttention(nn.Module):
+
+    pass
+
+
+class TerminationModule(nn.Module):
+    """ Calculates probability to stop compotations at stap t. """
+    def __init__(self, state_size):
+        super(LinearSeqAttn, self).__init__()
+        self.linear = nn.Linear(state_size, 1)
+
+    def forward(self, x):
+        """ term = W * s_t + b """
+        term_prob = nn.Softmax(self.linear(x))
+        return term_prob
+
+
+class AnswerModule(nn.Module):
+    """ Generates answer start and end distributions at step t. """
+    pass
+
+
+class Yobe():
+    pass
+
+
 
 
 # ------------------------------------------------------------------------------

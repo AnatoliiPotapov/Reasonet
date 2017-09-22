@@ -9,7 +9,7 @@ import argparse
 import collections
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from drqa.utils import str2bool
+from Reasonet.utils import str2bool
 import logging
 
 parser = argparse.ArgumentParser(

@@ -1,18 +1,20 @@
-import re
-import os
-import sys
-import random
-import string
-import logging
 import argparse
-from shutil import copyfile
-from datetime import datetime
+import logging
+import os
+import random
+import re
+import string
+import sys
 from collections import Counter
-import torch
+from datetime import datetime
+from shutil import copyfile
+
 import msgpack
 import pandas as pd
-from drqa.model import DocReaderModel
-from drqa.utils import str2bool
+import torch
+
+from Reasonet.model import DocReaderModel
+from Reasonet.utils import str2bool
 
 parser = argparse.ArgumentParser(
     description='Train a Document Reader model.'

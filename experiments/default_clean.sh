@@ -1,0 +1,1 @@
+python3 train.py  --pos False --ner False
