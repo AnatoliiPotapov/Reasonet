@@ -9,7 +9,7 @@ import argparse
 import collections
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from Reasonet.utils import str2bool
+from drqa.utils import str2bool
 import logging
 
 parser = argparse.ArgumentParser(
@@ -31,6 +31,14 @@ parser.add_argument('--threads', type=int, default=multiprocessing.cpu_count(),
                     help='number of threads for preprocessing.')
 parser.add_argument('--batch_size', type=int, default=64,
                     help='batch size for multiprocess tokenizing and tagging.')
+parser.add_argument('--pos', type=str2bool, nargs='?', const=True, default=True,
+                    help='extract pos features.')
+parser.add_argument('--ner', type=str2bool, nargs='?', const=True, default=True,
+                    help='extract ner features.')
+parser.add_argument('--tf', type=str2bool, nargs='?', const=True, default=True,
+                    help='extract term frequency.')
+parser.add_argument('--wq', type=str2bool, nargs='?', const=True, default=True,
+                    help='extract word in question features.')
 
 args = parser.parse_args()
 trn_file = 'SQuAD/train-v1.1.json'
@@ -174,7 +182,7 @@ log.info('answer pointer generated.')
 questions = list(train.question) + list(dev.question)
 contexts = list(train.context) + list(dev.context)
 
-nlp = spacy.load('en')
+nlp = spacy.load('en', tagger=args.pos, entity=args.ner)
 context_text = [pre_proc(c) for c in contexts]
 question_text = [pre_proc(q) for q in questions]
 question_docs = [doc for doc in nlp.pipe(
@@ -188,17 +196,22 @@ else:
     question_tokens = [[normalize_text(w.text).lower() for w in doc] for doc in question_docs]
     context_tokens = [[normalize_text(w.text).lower() for w in doc] for doc in context_docs]
 context_token_span = [[(w.idx, w.idx + len(w.text)) for w in doc] for doc in context_docs]
-context_tags = [[w.tag_ for w in doc] for doc in context_docs]
-context_ents = [[w.ent_type_ for w in doc] for doc in context_docs]
+if args.pos:
+    context_tags = [[w.tag_ for w in doc] for doc in context_docs]
+if args.ner:
+    context_ents = [[w.ent_type_ for w in doc] for doc in context_docs]
+
 context_features = []
-for question, context in zip(question_docs, context_docs):
-    question_word = {w.text for w in question}
-    question_lower = {w.text.lower() for w in question}
-    question_lemma = {w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower() for w in question}
-    match_origin = [w.text in question_word for w in context]
-    match_lower = [w.text.lower() in question_lower for w in context]
-    match_lemma = [(w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower()) in question_lemma for w in context]
-    context_features.append(list(zip(match_origin, match_lower, match_lemma)))
+if args.wq:
+    for question, context in zip(question_docs, context_docs):
+        question_word = {w.text for w in question}
+        question_lower = {w.text.lower() for w in question}
+        question_lemma = {w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower() for w in question}
+        match_origin = [w.text in question_word for w in context]
+        match_lower = [w.text.lower() in question_lower for w in context]
+        match_lemma = [(w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower()) in question_lemma for w in context]
+        context_features.append(list(zip(match_origin, match_lower, match_lemma)))
+
 log.info('tokens generated')
 
 
@@ -235,22 +248,29 @@ vocab, counter = build_vocab(question_tokens, context_tokens)
 question_ids = token2id(question_tokens, vocab, unk_id=1)
 context_ids = token2id(context_tokens, vocab, unk_id=1)
 # term frequency in document
-context_tf = []
-for doc in context_tokens:
-    counter_ = collections.Counter(w.lower() for w in doc)
-    total = sum(counter_.values())
-    context_tf.append([counter_[w.lower()] / total for w in doc])
-context_features = [[list(w) + [tf] for w, tf in zip(doc, tfs)] for doc, tfs in
-                    zip(context_features, context_tf)]
-# tags
-vocab_tag = list(nlp.tagger.tag_names)
-context_tag_ids = token2id(context_tags, vocab_tag)
-# entities, build dict on the fly
-counter_ent = collections.Counter(w for doc in context_ents for w in doc)
-vocab_ent = sorted(counter_ent, key=counter_ent.get, reverse=True)
-log.info('Found {} POS tags.'.format(len(vocab_tag)))
-log.info('Found {} entity tags: {}'.format(len(vocab_ent), vocab_ent))
-context_ent_ids = token2id(context_ents, vocab_ent)
+
+if args.tf:
+    context_tf = []
+    for doc in context_tokens:
+        counter_ = collections.Counter(w.lower() for w in doc)
+        total = sum(counter_.values())
+        context_tf.append([counter_[w.lower()] / total for w in doc])
+    context_features = [[list(w) + [tf] for w, tf in zip(doc, tfs)] for doc, tfs in
+                        zip(context_features, context_tf)]
+
+if args.pos:
+    # tags
+    vocab_tag = list(nlp.tagger.tag_names)
+    context_tag_ids = token2id(context_tags, vocab_tag)
+
+if args.ner:
+    # entities, build dict on the fly
+    counter_ent = collections.Counter(w for doc in context_ents for w in doc)
+    vocab_ent = sorted(counter_ent, key=counter_ent.get, reverse=True)
+    log.info('Found {} POS tags.'.format(len(vocab_tag)))
+    log.info('Found {} entity tags: {}'.format(len(vocab_ent), vocab_ent))
+    context_ent_ids = token2id(context_ents, vocab_ent)
+
 log.info('vocab built.')
 
 
@@ -281,17 +301,21 @@ result = {
     'dev_question_ids': question_ids[len(train):],
     'trn_context_ids': context_ids[:len(train)],
     'dev_context_ids': context_ids[len(train):],
-    'trn_context_features': context_features[:len(train)],
-    'dev_context_features': context_features[len(train):],
-    'trn_context_tags': context_tag_ids[:len(train)],
-    'dev_context_tags': context_tag_ids[len(train):],
-    'trn_context_ents': context_ent_ids[:len(train)],
-    'dev_context_ents': context_ent_ids[len(train):],
     'trn_context_text': context_text[:len(train)],
     'dev_context_text': context_text[len(train):],
     'trn_context_spans': context_token_span[:len(train)],
     'dev_context_spans': context_token_span[len(train):]
 }
+if args.pos:
+    result['trn_context_tags'] = context_tag_ids[:len(train)]
+    result['dev_context_tags'] = context_tag_ids[len(train):]
+if args.ner:
+    result['trn_context_ents'] = context_ent_ids[:len(train)]
+    result['dev_context_ents'] = context_ent_ids[len(train):]
+if args.tf or args.wq:
+    result['trn_context_features'] = context_features[:len(train)]
+    result['dev_context_features'] = context_features[len(train):]
+
 with open('SQuAD/data.msgpack', 'wb') as f:
     msgpack.dump(result, f)
 if args.sample_size:
@@ -301,17 +325,21 @@ if args.sample_size:
         'dev_question_ids': result['dev_question_ids'][:sample_size],
         'trn_context_ids': result['trn_context_ids'][:sample_size],
         'dev_context_ids': result['dev_context_ids'][:sample_size],
-        'trn_context_features': result['trn_context_features'][:sample_size],
-        'dev_context_features': result['dev_context_features'][:sample_size],
-        'trn_context_tags': result['trn_context_tags'][:sample_size],
-        'dev_context_tags': result['dev_context_tags'][:sample_size],
-        'trn_context_ents': result['trn_context_ents'][:sample_size],
-        'dev_context_ents': result['dev_context_ents'][:sample_size],
         'trn_context_text': result['trn_context_text'][:sample_size],
         'dev_context_text': result['dev_context_text'][:sample_size],
         'trn_context_spans': result['trn_context_spans'][:sample_size],
         'dev_context_spans': result['dev_context_spans'][:sample_size]
     }
+    if args.tf or args.wq:
+        sample['trn_context_features'] = result['trn_context_features'][:sample_size]
+        sample['dev_context_features'] = result['dev_context_features'][:sample_size]
+    if args.pos:
+        sample['trn_context_tags'] = result['trn_context_tags'][:sample_size]
+        sample['dev_context_tags'] = result['dev_context_tags'][:sample_size]
+    if args.ner:
+        sample['trn_context_ents'] = result['trn_context_ents'][:sample_size]
+        sample['dev_context_ents'] = result['dev_context_ents'][:sample_size]
+
     with open('SQuAD/sample.msgpack', 'wb') as f:
         msgpack.dump(sample, f)
 log.info('saved to disk.')

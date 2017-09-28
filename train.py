@@ -1,20 +1,18 @@
-import argparse
-import logging
-import os
-import random
 import re
-import string
+import os
 import sys
-from collections import Counter
-from datetime import datetime
+import random
+import string
+import logging
+import argparse
 from shutil import copyfile
-
+from datetime import datetime
+from collections import Counter
+import torch
 import msgpack
 import pandas as pd
-import torch
-
-from Reasonet.model import DocReaderModel
-from Reasonet.utils import str2bool
+from drqa.model import DocReaderModel
+from drqa.utils import str2bool
 
 parser = argparse.ArgumentParser(
     description='Train a Document Reader model.'
@@ -79,6 +77,8 @@ parser.add_argument('--ner_size', type=int, default=19,
                     help='how many kinds of named entity tags.')
 parser.add_argument('--ner_dim', type=int, default=8,
                     help='the embedding dimension for named entity tags.')
+parser.add_argument('--features', type=str2bool, nargs='?', const=True, default=True,
+                    help='use additional features.')
 parser.add_argument('--use_qemb', type=str2bool, nargs='?', const=True, default=True)
 parser.add_argument('--concat_rnn_layers', type=str2bool, nargs='?',
                     const=True, default=True)
@@ -123,6 +123,18 @@ def main():
     train, dev, dev_y, embedding, opt = load_data(vars(args))
     log.info('[Data loaded.]')
 
+    # calculating pos, ner, additional features indexes
+    pos_idx = None
+    ner_idx = None
+    features_idx = None
+
+    if args.features:
+        features_idx = 5
+    if args.pos:
+        pos_idx = 5 + args.features
+    if args.ner:
+        ner_idx = 5 + args.features + args.pos
+
     if args.resume:
         log.info('[loading previous model...]')
         checkpoint = torch.load(os.path.join(model_dir, args.resume))
@@ -143,7 +155,7 @@ def main():
         model.cuda()
 
     if args.resume:
-        batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda)
+        batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda,  pos_idx=pos_idx-2, ner_idx=ner_idx-2, feature_idx=features_idx-2)
         predictions = []
         for batch in batches:
             predictions.extend(model.predict(batch))
@@ -156,7 +168,7 @@ def main():
     for epoch in range(epoch_0, epoch_0 + args.epochs):
         log.warn('Epoch {}'.format(epoch))
         # train
-        batches = BatchGen(train, batch_size=args.batch_size, gpu=args.cuda)
+        batches = BatchGen(train, batch_size=args.batch_size, gpu=args.cuda, pos_idx=pos_idx, ner_idx=ner_idx, feature_idx=features_idx)
         start = datetime.now()
         for i, batch in enumerate(batches):
             model.update(batch)
@@ -166,7 +178,7 @@ def main():
                     str((datetime.now() - start) / (i + 1) * (len(batches) - i - 1)).split('.')[0]))
         # eval
         if epoch % args.eval_per_epoch == 0:
-            batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda)
+            batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, pos_idx=pos_idx-2, ner_idx=ner_idx-2, feature_idx=features_idx-2)
             predictions = []
             for batch in batches:
                 predictions.extend(model.predict(batch))
@@ -206,31 +218,41 @@ def load_data(opt):
     dev_orig = pd.read_csv('SQuAD/dev.csv')
     train = list(zip(
         data['trn_context_ids'],
-        data['trn_context_features'],
-        data['trn_context_tags'],
-        data['trn_context_ents'],
         data['trn_question_ids'],
-        train_orig['answer_start_token'].tolist(),
-        train_orig['answer_end_token'].tolist(),
         data['trn_context_text'],
-        data['trn_context_spans']
+        data['trn_context_spans'],
+        train_orig['answer_start_token'].tolist(),
+        train_orig['answer_end_token'].tolist()
     ))
+
+    if args.features:
+        train = [list(f1) + [f2] for f1, f2 in zip(train, data['trn_context_features'])]
+    if args.pos:
+        train = [list(f1) + [f2] for f1, f2 in zip(train, data['trn_context_tags'])]
+    if args.ner:
+        train = [list(f1) + [f2] for f1, f2 in zip(train, data['trn_context_ents'])]
+
     dev = list(zip(
         data['dev_context_ids'],
-        data['dev_context_features'],
-        data['dev_context_tags'],
-        data['dev_context_ents'],
         data['dev_question_ids'],
         data['dev_context_text'],
         data['dev_context_spans']
     ))
+
+    if args.features:
+        dev = [list(f1) + [f2] for f1, f2 in zip(dev, data['dev_context_features'])]
+    if args.pos:
+        dev = [list(f1) + [f2] for f1, f2 in zip(dev, data['dev_context_tags'])]
+    if args.ner:
+        dev = [list(f1) + [f2] for f1, f2 in zip(dev, data['dev_context_ents'])]
+
     dev_y = dev_orig['answers'].tolist()[:len(dev)]
     dev_y = [eval(y) for y in dev_y]
     return train, dev, dev_y, embedding, opt
 
 
 class BatchGen:
-    def __init__(self, data, batch_size, gpu, evaluation=False):
+    def __init__(self, data, batch_size, gpu, evaluation=False, pos_idx=5, ner_idx=6, feature_idx=7):
         '''
         input:
             data - list of lists
@@ -239,6 +261,9 @@ class BatchGen:
         self.batch_size = batch_size
         self.eval = evaluation
         self.gpu = gpu
+        self.pos_idx = pos_idx
+        self.ner_idx = ner_idx
+        self.feature_idx = feature_idx
 
         # shuffle
         if not evaluation:
@@ -256,55 +281,70 @@ class BatchGen:
         for batch in self.data:
             batch_size = len(batch)
             batch = list(zip(*batch))
-            if self.eval:
-                assert len(batch) == 7
-            else:
-                assert len(batch) == 9
 
             context_len = max(len(x) for x in batch[0])
             context_id = torch.LongTensor(batch_size, context_len).fill_(0)
             for i, doc in enumerate(batch[0]):
                 context_id[i, :len(doc)] = torch.LongTensor(doc)
 
-            feature_len = len(batch[1][0][0])
-            context_feature = torch.Tensor(batch_size, context_len, feature_len).fill_(0)
-            for i, doc in enumerate(batch[1]):
-                for j, feature in enumerate(doc):
-                    context_feature[i, j, :] = torch.Tensor(feature)
+            if args.features:
+                feature_len = len(batch[self.feature_idx][0][0])
+                context_feature = torch.Tensor(batch_size, context_len, feature_len).fill_(0)
+                for i, doc in enumerate(self.feature_idx):
+                    for j, feature in enumerate(doc):
+                        context_feature[i, j, :] = torch.Tensor(feature)
 
-            context_tag = torch.LongTensor(batch_size, context_len).fill_(0)
-            for i, doc in enumerate(batch[2]):
-                context_tag[i, :len(doc)] = torch.LongTensor(doc)
+            if args.pos:
+                context_tag = torch.LongTensor(batch_size, context_len).fill_(0)
+                for i, doc in enumerate(batch[self.pos_idx]):
+                    context_tag[i, :len(doc)] = torch.LongTensor(doc)
 
-            context_ent = torch.LongTensor(batch_size, context_len).fill_(0)
-            for i, doc in enumerate(batch[3]):
-                context_ent[i, :len(doc)] = torch.LongTensor(doc)
-            question_len = max(len(x) for x in batch[4])
+            if args.ner:
+                context_ent = torch.LongTensor(batch_size, context_len).fill_(0)
+                for i, doc in enumerate(batch[self.ner_idx]):
+                    context_ent[i, :len(doc)] = torch.LongTensor(doc)
+
+            question_len = max(len(x) for x in batch[1])
             question_id = torch.LongTensor(batch_size, question_len).fill_(0)
-            for i, doc in enumerate(batch[4]):
+            for i, doc in enumerate(batch[1]):
                 question_id[i, :len(doc)] = torch.LongTensor(doc)
 
             context_mask = torch.eq(context_id, 0)
             question_mask = torch.eq(question_id, 0)
+
             if not self.eval:
-                y_s = torch.LongTensor(batch[5])
-                y_e = torch.LongTensor(batch[6])
-            text = list(batch[-2])
-            span = list(batch[-1])
+                y_s = torch.LongTensor(batch[4])
+                y_e = torch.LongTensor(batch[5])
+            text = list(batch[2])
+            span = list(batch[3])
+
             if self.gpu:
                 context_id = context_id.pin_memory()
-                context_feature = context_feature.pin_memory()
-                context_tag = context_tag.pin_memory()
-                context_ent = context_ent.pin_memory()
                 context_mask = context_mask.pin_memory()
                 question_id = question_id.pin_memory()
                 question_mask = question_mask.pin_memory()
+                if args.features:
+                    context_feature = context_feature.pin_memory()
+                if args.pos:
+                    context_tag = context_tag.pin_memory()
+                if args.ner:
+                    context_ent = context_ent.pin_memory()
+
+            content = (text, span,
+            context_id, context_mask,
+            question_id, question_mask)
+            if args.features:
+                content = content + context_feature
+            if args.pos:
+                content = content + context_tag
+            if args.ner:
+                content = content + context_ent
+
             if self.eval:
-                yield (context_id, context_feature, context_tag, context_ent, context_mask,
-                       question_id, question_mask, text, span)
+                yield content
+
             else:
-                yield (context_id, context_feature, context_tag, context_ent, context_mask,
-                       question_id, question_mask, y_s, y_e, text, span)
+                yield (y_s, y_e) + content
 
 
 def _normalize_answer(s):
