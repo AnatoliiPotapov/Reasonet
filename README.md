@@ -20,7 +20,7 @@ Changes:
 
 ## Quick Start
 ### Setup
-- download the project via `git clone https://github.com/AnatoliiPotapov/Reasonet.git; cd DrQA`
+- download the project via `git clone https://github.com/AnatoliiPotapov/Reasonet.git; cd Reasonet`
 - make sure python 3 and pip is installed.
 - install [pytorch](http://pytorch.org/) matched with your OS, python and cuda versions.
 - install the remaining requirements via `pip install -r requirements.txt`
@@ -29,10 +29,12 @@ Changes:
 ### Train
 
 ```bash
+# download data
+bash download.sh
 # prepare the data
-python prepro.py --pos False --ner False --tf False --wq False
+python3 prepro.py --pos False --ner False --tf False --wq False
 # train for 20 epoches with batchsize 32
-python train.py -e 20 -bs 32 --pos False --ner False --features False
+python3 train.py -e 20 -bs 32 --pos False --ner False --features False
 ```
 
 ### Detailed Comparisons (DRQA model)
