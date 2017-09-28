@@ -7,7 +7,7 @@ Most of the pytorch model code is borrowed from [Facebook/ParlAI](https://github
 
 Changes:
 
-- Peprocessing and training without pos, ner and any additional features is now supported
+- Peprocessing and training without pos, ner and any additional features is now supported.
 
 
 ## Requirements
