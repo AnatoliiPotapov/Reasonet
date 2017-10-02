@@ -11,7 +11,8 @@ from collections import Counter
 import torch
 import msgpack
 import pandas as pd
-from drqa.model import DocReaderModel
+from drqa.model import DocReaderModel as drqa_DocReaderModel
+from reasonet.model import DocReaderModel as reasonet_DocReaderModel
 from drqa.utils import str2bool
 
 parser = argparse.ArgumentParser(
@@ -60,6 +61,8 @@ parser.add_argument('--fix_embeddings', action='store_true',
 parser.add_argument('--rnn_padding', action='store_true',
                     help='perform rnn padding (much slower but more accurate).')
 # model
+parser.add_argument('--model', default='reasonet')
+
 parser.add_argument('--question_merge', default='self_attn')
 parser.add_argument('--doc_layers', type=int, default=3)
 parser.add_argument('--question_layers', type=int, default=3)
@@ -134,6 +137,14 @@ def main():
         pos_idx = 5 + args.features
     if args.ner:
         ner_idx = 5 + args.features + args.pos
+
+    if (args.model == 'reasonet'):
+        DocReaderModel = reasonet_DocReaderModel
+    elif (args.model == 'drqa'):
+        DocReaderModel = drqa_DocReaderModel
+    else:
+        raise Exception("No model have this name!")
+
 
     if args.resume:
         log.info('[loading previous model...]')
