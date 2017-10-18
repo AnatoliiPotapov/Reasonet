@@ -1,5 +1,8 @@
-SQuAD
 glove
+logs
+serialization_dir
+squad
+cache_dir.*
 .idea
 .ipynb_checkpoins
-Reasonet
+
